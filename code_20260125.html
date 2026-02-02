@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>号码管理系统 - 号池/成交/废号</title>
+    <!-- 引入Excel导出核心库 XLSX.js -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        success: '#00B42A',
+                        danger: '#F53F3F',
+                        warning: '#FF7D00',
+                        gray: {
+                            100: '#F2F3F5',
+                            200: '#E5E6EB',
+                            300: '#C9CDD4',
+                            400: '#86909C',
+                            500: '#4E5969',
+                            600: '#1D2129',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Helvetica Neue', 'Arial', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .swipe-item {
+                touch-action: pan-y;
+                overflow: hidden;
+                position: relative;
+            }
+            .swipe-content {
+                transition: transform 0.3s ease;
+                position: relative;
+                z-index: 1;
+            }
+            .swipe-actions {
+                position: absolute;
+                top: 0;
+                right: 0;
+                height: 100%;
+                display: flex;
+                z-index: 0;
+            }
+            .swipe-actions-left {
+                position: absolute;
+                top: 0;
+                left: 0;
+                height: 100%;
+                display: flex;
+                z-index: 0;
+            }
+            .swipe-btn {
+                width: 70px; /* 缩小滑动按钮宽度 */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 13px; /* 缩小按钮文字 */
+            }
+            .shadow-sm {
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+            }
+            .input-error {
+                border-color: #F53F3F !important;
+            }
+            .error-tip {
+                color: #F53F3F;
+                font-size: 12px;
+                margin-top: 4px;
+                display: none;
+            }
+            .success-tip {
+                color: #00B42A;
+                font-size: 12px;
+                margin-top: 4px;
+                display: none;
+            }
+            .default-tag {
+                background-color: #165DFF;
+                color: white;
+                font-size: 10px;
+                padding: 1px 6px;
+                border-radius: 4px;
+                margin-left: 8px;
+            }
+            .color-preview {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid #E5E6EB;
+            }
+            .export-btn {
+                width: 100%;
+                background-color: #165DFF;
+                color: white;
+                padding: 12px 0;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 500;
+                text-align: center;
+                margin-top: 20px;
+            }
+            /* 弹窗内容层：阻止点击冒泡到遮罩层 */
+            .modal-content {
+                position: relative;
+                z-index: 1;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans text-gray-600 min-h-screen">
+    <!-- 提示弹窗 -->
+    <div id="tipModal" class="fixed top-10 left-1/2 -translate-x-1/2 bg-white px-4 py-2 rounded shadow-lg z-50 hidden">
+        <span id="tipText">操作提示</span>
+    </div>
+    <!-- 主容器 -->
+    <div class="max-w-md mx-auto bg-white min-h-screen">
+        <!-- 顶部数据栏：优化自适应布局，手机端强制4列紧凑显示 -->
+        <header class="bg-primary text-white p-2 sticky top-0 z-10">
+            <div class="grid grid-cols-4 gap-1 text-center">
+                <div>
+                    <div class="text-[10px] opacity-80">总盈利</div>
+                    <div id="totalProfit" class="text-base font-bold">¥0.00</div>
+                </div>
+                <div>
+                    <div class="text-[10px] opacity-80">号池</div>
+                    <div id="poolCount" class="text-base font-bold">0</div>
+                </div>
+                <div>
+                    <div class="text-[10px] opacity-80">成交</div>
+                    <div id="dealCount" class="text-base font-bold">0</div>
+                </div>
+                <div>
+                    <div class="text-[10px] opacity-80">总号数</div>
+                    <div id="totalCount" class="text-base font-bold">0</div>
+                </div>
+            </div>
+        </header>
+        <!-- 导航栏：修改"配置"为"设置" -->
+        <nav class="flex bg-white border-b border-gray-200">
+            <button class="tab-btn flex-1 py-2 text-center font-medium text-primary border-b-2 border-primary text-sm" data-tab="pool">号池</button>
+            <button class="tab-btn flex-1 py-2 text-center font-medium text-gray-400 text-sm" data-tab="dealed">成交</button>
+            <button class="tab-btn flex-1 py-2 text-center font-medium text-gray-400 text-sm" data-tab="deleted">废号</button>
+            <button class="tab-btn flex-1 py-2 text-center font-medium text-gray-400 text-sm" data-tab="setting">设置</button>
+        </nav>
+        <!-- 主要内容区 -->
+        <main class="p-2 pb-16">
+            <!-- 号池 Tab -->
+            <section id="poolTab" class="tab-content block">
+                <div class="flex justify-between mb-2">
+                    <button id="deleteAllBtn" class="px-2 py-1 bg-danger text-white rounded text-xs">清空号池</button>
+                    <button id="addNumberBtn" class="px-2 py-1 bg-primary text-white rounded text-xs">添加号码</button>
+                </div>
+                <div id="poolList" class="space-y-1.5">
+                    <div class="text-center text-gray-400 py-8 text-sm" id="poolEmpty">
+                        暂无号池记录，点击添加
+                    </div>
+                </div>
+            </section>
+            <!-- 成交 Tab -->
+            <section id="dealedTab" class="tab-content hidden">
+                <div id="dealedList" class="space-y-1.5">
+                    <div class="text-center text-gray-400 py-8 text-sm" id="dealedEmpty">
+                        暂无成交记录
+                    </div>
+                </div>
+            </section>
+            <!-- 废号 Tab -->
+            <section id="deletedTab" class="tab-content hidden">
+                <div id="deletedList" class="space-y-1.5">
+                    <div class="text-center text-gray-400 py-8 text-sm" id="deletedEmpty">
+                        暂无废号记录
+                    </div>
+                </div>
+            </section>
+            <!-- 设置 Tab（原配置Tab） -->
+            <section id="settingTab" class="tab-content hidden">
+                <div class="space-y-6">
+                    <!-- 账号配置：增加颜色选择 -->
+                    <div class="bg-gray-100 p-4 rounded">
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="font-medium text-lg">账号配置</h3>
+                            <button class="text-primary text-sm add-config-btn" data-type="accounts">添加账号</button>
+                        </div>
+                        <div id="accountsList" class="space-y-3">
+                            <!-- 账号项会动态生成 -->
+                        </div>
+                    </div>
+                    <!-- 店名配置 -->
+                    <div class="bg-gray-100 p-4 rounded">
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="font-medium text-lg">店名配置</h3>
+                            <button class="text-primary text-sm add-config-btn" data-type="shops">添加店名</button>
+                        </div>
+                        <div id="shopsList" class="space-y-3">
+                            <!-- 店名项会动态生成 -->
+                        </div>
+                    </div>
+                    <!-- 类型配置 -->
+                    <div class="bg-gray-100 p-4 rounded">
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="font-medium text-lg">类型配置</h3>
+                            <button class="text-primary text-sm add-config-btn" data-type="types">添加类型</button>
+                        </div>
+                        <div id="typesList" class="space-y-3">
+                            <!-- 类型项会动态生成 -->
+                        </div>
+                    </div>
+                    <!-- 数据导出功能 -->
+                    <div class="bg-gray-100 p-4 rounded mt-8">
+                        <h3 class="font-medium text-lg mb-4">数据导出</h3>
+                        <p class="text-sm text-gray-500 mb-3">导出所有记录（号池/成交/废号），Excel格式，含记录状态及全量详情</p>
+                        <button id="exportAllBtn" class="export-btn">导出全部记录</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <!-- 添加/编辑号码弹窗：增加modal-content类 -->
+    <div id="numberFormModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+        <div class="modal-content bg-white rounded-lg w-11/12 max-w-md p-4 shadow-lg">
+            <div class="flex justify-between items-center mb-3">
+                <h3 id="formTitle" class="font-medium text-lg">添加号码</h3>
+                <button class="close-modal text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <form id="numberForm" class="space-y-3" novalidate>
+                <input type="hidden" id="formId" name="formId">
+                <div>
+                    <label class="block text-sm mb-1">账号 <span class="text-danger">*</span></label>
+                    <select id="formAccount" name="formAccount" class="w-full p-2 border border-gray-200 rounded" required>
+                        <option value="">请选择账号</option>
+                    </select>
+                    <div class="error-tip" id="tipAccount">请选择账号</div>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">店名 <span class="text-danger">*</span></label>
+                    <select id="formShop" name="formShop" class="w-full p-2 border border-gray-200 rounded" required>
+                        <option value="">请选择店名</option>
+                    </select>
+                    <div class="error-tip" id="tipShop">请选择店名</div>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">号码 <span class="text-danger">*</span></label>
+                    <input type="text" id="formNumber" name="formNumber" class="w-full p-2 border border-gray-200 rounded" placeholder="请输入号码" required>
+                    <div class="error-tip" id="tipNumber">请输入号码</div>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">类型 <span class="text-danger">*</span></label>
+                    <select id="formType" name="formType" class="w-full p-2 border border-gray-200 rounded" required>
+                        <option value="">请选择类型</option>
+                    </select>
+                    <div class="error-tip" id="tipType">请选择类型</div>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">日期 <span class="text-danger">*</span></label>
+                    <input type="date" id="formDate" name="formDate" class="w-full p-2 border border-gray-200 rounded" required>
+                    <div class="error-tip" id="tipDate">请选择日期</div>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">成本(¥)</label>
+                    <input type="number" id="formCost" name="formCost" class="w-full p-2 border border-gray-200 rounded" placeholder="0.00" step="0.01" min="0">
+                    <div class="text-gray-400 text-xs mt-1">未填写默认0元</div>
+                </div>
+                <div id="dealAmountContainer" class="hidden">
+                    <label class="block text-sm mb-1">成交金额(¥)</label>
+                    <input type="number" id="formDealAmount" name="formDealAmount" class="w-full p-2 border border-gray-200 rounded" placeholder="0.00" step="0.01" min="0" required>
+                    <div class="error-tip" id="tipDealAmount">请输入成交金额</div>
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button type="button" class="close-modal flex-1 py-2 border border-gray-200 rounded text-gray-600">取消</button>
+                    <button type="submit" class="flex-1 py-2 bg-primary text-white rounded">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- 配置项编辑弹窗：增加账号颜色选择 -->
+    <div id="configFormModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+        <div class="modal-content bg-white rounded-lg w-11/12 max-w-md p-4 shadow-lg">
+            <div class="flex justify-between items-center mb-3">
+                <h3 id="configFormTitle" class="font-medium text-lg">添加配置项</h3>
+                <button class="close-modal text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <form id="configForm" class="space-y-3" novalidate>
+                <input type="hidden" id="configFormType" name="configFormType">
+                <input type="hidden" id="configFormId" name="configFormId">
+                <div>
+                    <label class="block text-sm mb-1">名称 <span class="text-danger">*</span></label>
+                    <input type="text" id="configFormName" name="configFormName" class="w-full p-2 border border-gray-200 rounded" placeholder="请输入名称" required>
+                </div>
+                <!-- 账号专属：颜色选择（浅色系列） -->
+                <div id="colorSelector" class="hidden">
+                    <label class="block text-sm mb-1">记录颜色</label>
+                    <div class="flex items-center gap-2">
+                        <select id="configFormColor" name="configFormColor" class="flex-1 p-2 border border-gray-200 rounded">
+                            <option value="#E8F3FF">浅蓝</option>
+                            <option value="#E6F7EF">浅绿</option>
+                            <option value="#FFF7E6">浅黄</option>
+                            <option value="#F0F2F5">浅灰</option>
+                            <option value="#FFE8E8">浅红</option>
+                            <option value="#F9E8FF">浅紫</option>
+                            <option value="#E8FBFF">浅青</option>
+                        </select>
+                        <div id="colorPreview" class="color-preview" style="background-color: #E8F3FF;"></div>
+                    </div>
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button type="button" class="close-modal flex-1 py-2 border border-gray-200 rounded text-gray-600">取消</button>
+                    <button type="submit" class="flex-1 py-2 bg-primary text-white rounded">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- 确认弹窗：增加modal-content类 -->
+    <div id="confirmModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+        <div class="modal-content bg-white rounded-lg w-11/12 max-w-md p-4 shadow-lg">
+            <h3 id="confirmTitle" class="font-medium text-lg mb-3">确认操作</h3>
+            <p id="confirmMessage" class="mb-4 text-gray-500">您确定要执行此操作吗？</p>
+            <div class="flex gap-2">
+                <button id="confirmCancel" class="flex-1 py-2 border border-gray-200 rounded text-gray-600">取消</button>
+                <button id="confirmOk" class="flex-1 py-2 bg-danger text-white rounded">确认</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        // 数据模型 - 新增账号颜色字段
+        const DataStore = {
+            init() {
+                if (!localStorage.getItem('bsn_config')) {
+                    const defaultConfig = {
+                        accounts: [{id:1,name:'0770',color:'#E8F3FF'}], // 默认浅蓝
+                        shops: [{id:1,name:'丽泽'}],
+                        types: [{id:1,name:'排队'}]
+                    };
+                    localStorage.setItem('bsn_config', JSON.stringify(defaultConfig));
+                }
+                // 兼容旧数据：给已有账号添加默认颜色
+                this.fixOldAccountData();
+                
+                if (!localStorage.getItem('bsn_default_config')) {
+                    localStorage.setItem('bsn_default_config', JSON.stringify({
+                        accounts: 1,
+                        shops: 1,
+                        types: 1
+                    }));
+                }
+                if (!localStorage.getItem('bsn_numbers')) {
+                    localStorage.setItem('bsn_numbers', JSON.stringify([]));
+                }
+                this.updateStats();
+            },
+            // 兼容旧数据：为没有color字段的账号添加默认颜色
+            fixOldAccountData() {
+                const config = JSON.parse(localStorage.getItem('bsn_config')) || {};
+                if (config.accounts && config.accounts.length > 0) {
+                    const hasNoColor = config.accounts.some(item => !item.color);
+                    if (hasNoColor) {
+                        config.accounts = config.accounts.map(item => ({
+                            ...item,
+                            color: item.color || '#E8F3FF' // 默认浅蓝
+                        }));
+                        localStorage.setItem('bsn_config', JSON.stringify(config));
+                    }
+                }
+            },
+            getConfig(type) {
+                const config = JSON.parse(localStorage.getItem('bsn_config')) || {};
+                return config[type] || [];
+            },
+            saveConfig(type, data) {
+                const config = JSON.parse(localStorage.getItem('bsn_config')) || {};
+                config[type] = data;
+                localStorage.setItem('bsn_config', JSON.stringify(config));
+            },
+            getDefaultConfigId(type) {
+                const defaultConfig = JSON.parse(localStorage.getItem('bsn_default_config')) || {};
+                return defaultConfig[type] || null;
+            },
+            getDefaultConfigValue(type) {
+                const defaultId = this.getDefaultConfigId(type);
+                if (!defaultId) return '';
+                const configList = DataStore.getConfig(type);
+                const defaultItem = configList.find(item => item.id === defaultId);
+                return defaultItem ? defaultItem.name : '';
+            },
+            // 根据账号名称获取对应的颜色
+            getAccountColor(accountName) {
+                const accounts = this.getConfig('accounts');
+                const account = accounts.find(item => item.name === accountName);
+                return account ? account.color : '#FFFFFF'; // 默认白色
+            },
+            setDefaultConfig(type, id) {
+                const defaultConfig = JSON.parse(localStorage.getItem('bsn_default_config')) || {};
+                defaultConfig[type] = id;
+                localStorage.setItem('bsn_default_config', JSON.stringify(defaultConfig));
+                Renderer.renderConfig(type);
+            },
+            clearDefaultConfig(type) {
+                const defaultConfig = JSON.parse(localStorage.getItem('bsn_default_config')) || {};
+                delete defaultConfig[type];
+                localStorage.setItem('bsn_default_config', JSON.stringify(defaultConfig));
+                Renderer.renderConfig(type);
+            },
+            getNumbers(status = 'pool') {
+                const numbers = JSON.parse(localStorage.getItem('bsn_numbers')) || [];
+                return numbers.filter(item => item.status === status).sort((a,b) => new Date(b.createTime) - new Date(a.createTime));
+            },
+            getAllNumbers() {
+                return JSON.parse(localStorage.getItem('bsn_numbers')) || [];
+            },
+            saveNumber(number) {
+                try {
+                    const numbers = this.getAllNumbers();
+                    const index = numbers.findIndex(item => item.id === number.id);
+                    if (number.cost === '' || number.cost === undefined || isNaN(number.cost)) {
+                        number.cost = 0;
+                    } else {
+                        number.cost = parseFloat(number.cost);
+                    }
+                    if (index > -1) {
+                        numbers[index] = {...numbers[index], ...number};
+                    } else {
+                        number.id = Date.now();
+                        number.createTime = new Date().toISOString();
+                        number.status = 'pool';
+                        numbers.push(number);
+                    }
+                    localStorage.setItem('bsn_numbers', JSON.stringify(numbers));
+                    this.updateStats();
+                    return true;
+                } catch (e) {
+                    console.error('保存失败:', e);
+                    return false;
+                }
+            },
+            updateNumberStatus(id, status, dealAmount = 0) {
+                const numbers = this.getAllNumbers();
+                const index = numbers.findIndex(item => item.id === id);
+                if (index > -1) {
+                    numbers[index].status = status;
+                    if (status === 'dealed') {
+                        numbers[index].dealAmount = dealAmount;
+                        numbers[index].dealTime = new Date().toISOString();
+                    }
+                    localStorage.setItem('bsn_numbers', JSON.stringify(numbers));
+                    this.updateStats();
+                }
+            },
+            deleteNumber(id) {
+                let numbers = this.getAllNumbers();
+                numbers = numbers.filter(item => item.id !== id);
+                localStorage.setItem('bsn_numbers', JSON.stringify(numbers));
+                this.updateStats();
+            },
+            clearPool() {
+                const numbers = this.getAllNumbers();
+                numbers.forEach(item => {
+                    if (item.status === 'pool') item.status = 'deleted';
+                });
+                localStorage.setItem('bsn_numbers', JSON.stringify(numbers));
+                this.updateStats();
+            },
+            updateStats() {
+                const numbers = this.getAllNumbers();
+                const poolCount = numbers.filter(item => item.status === 'pool').length;
+                const dealCount = numbers.filter(item => item.status === 'dealed').length;
+                const totalCount = numbers.length;
+                
+                let totalCost = 0;
+                let totalDealAmount = 0;
+                
+                numbers.forEach(item => {
+                    const cost = parseFloat(item.cost || 0);
+                    totalCost += cost;
+                    if (item.status === 'dealed') {
+                        totalDealAmount += parseFloat(item.dealAmount || 0);
+                    }
+                });
+                
+                const totalProfit = totalDealAmount - totalCost;
+                const totalProfitEl = document.getElementById('totalProfit');
+                const poolCountEl = document.getElementById('poolCount');
+                const dealCountEl = document.getElementById('dealCount');
+                const totalCountEl = document.getElementById('totalCount');
+                if (totalProfitEl) totalProfitEl.textContent = `¥${totalProfit.toFixed(2)}`;
+                if (poolCountEl) poolCountEl.textContent = poolCount;
+                if (dealCountEl) dealCountEl.textContent = dealCount;
+                if (totalCountEl) totalCountEl.textContent = totalCount;
+            }
+        };
+        // UI渲染器
+        const Renderer = {
+            init() {
+                this.renderConfig('accounts');
+                this.renderConfig('shops');
+                this.renderConfig('types');
+                this.renderPool();
+                this.renderDealed();
+                this.renderDeleted();
+                this.bindInputEvents();
+                this.bindExportEvent();
+                this.bindModalOutsideClose();
+                this.bindColorPreview(); // 绑定颜色预览事件
+            },
+            // 渲染配置项：账号项显示颜色预览
+            renderConfig(type) {
+                const configList = DataStore.getConfig(type);
+                const container = document.getElementById(`${type}List`);
+                const defaultId = DataStore.getDefaultConfigId(type);
+                if (!container) return;
+                container.innerHTML = '';
+                if (configList.length === 0) {
+                    container.innerHTML = `<div class="text-center text-gray-400 py-4">暂无${this.getTypeName(type)}配置</div>`;
+                    return;
+                }
+                configList.forEach(item => {
+                    const isDefault = item.id === defaultId;
+                    const div = document.createElement('div');
+                    div.className = 'flex justify-between items-center bg-white p-3 rounded shadow-sm';
+                    
+                    // 账号项增加颜色预览
+                    let leftContent = `<div class="flex items-center">
+                                            <span>${item.name}</span>
+                                            ${isDefault ? '<span class="default-tag">默认</span>' : ''}
+                                        </div>`;
+                    
+                    // 账号配置额外显示颜色块
+                    if (type === 'accounts') {
+                        leftContent = `<div class="flex items-center gap-2">
+                                            <div class="color-preview" style="background-color: ${item.color || '#E8F3FF'}"></div>
+                                            <span>${item.name}</span>
+                                            ${isDefault ? '<span class="default-tag">默认</span>' : ''}
+                                        </div>`;
+                    }
+                    
+                    div.innerHTML = `
+                        ${leftContent}
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center cursor-pointer text-sm">
+                                <input type="checkbox" class="default-checkbox mr-1" data-type="${type}" data-id="${item.id}" ${isDefault ? 'checked' : ''}>
+                                <span>设为默认</span>
+                            </label>
+                            <button class="text-primary text-sm edit-config-btn" data-type="${type}" data-id="${item.id}">编辑</button>
+                            <button class="text-danger text-sm delete-config-btn" data-type="${type}" data-id="${item.id}">删除</button>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                });
+                this.bindDefaultCheckboxEvents();
+                this.updateSelectOptions();
+            },
+            getTypeName(type) {
+                switch(type) {
+                    case 'accounts': return '账号';
+                    case 'shops': return '店名';
+                    case 'types': return '类型';
+                    default: return '配置';
+                }
+            },
+            bindDefaultCheckboxEvents() {
+                document.querySelectorAll('.default-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        const type = e.target.dataset.type;
+                        const id = parseInt(e.target.dataset.id);
+                        if (e.target.checked) {
+                            DataStore.setDefaultConfig(type, id);
+                        } else {
+                            DataStore.clearDefaultConfig(type);
+                        }
+                    });
+                });
+            },
+            updateSelectOptions() {
+                const accountSelect = document.getElementById('formAccount');
+                const shopSelect = document.getElementById('formShop');
+                const typeSelect = document.getElementById('formType');
+                if (!accountSelect || !shopSelect || !typeSelect) return;
+                accountSelect.innerHTML = '<option value="">请选择账号</option>';
+                DataStore.getConfig('accounts').forEach(item => {
+                    accountSelect.innerHTML += `<option value="${item.name}">${item.name}</option>`;
+                });
+                shopSelect.innerHTML = '<option value="">请选择店名</option>';
+                DataStore.getConfig('shops').forEach(item => {
+                    shopSelect.innerHTML += `<option value="${item.name}">${item.name}</option>`;
+                });
+                typeSelect.innerHTML = '<option value="">请选择类型</option>';
+                DataStore.getConfig('types').forEach(item => {
+                    typeSelect.innerHTML += `<option value="${item.name}">${item.name}</option>`;
+                });
+                const defaultAccount = DataStore.getDefaultConfigValue('accounts');
+                const defaultShop = DataStore.getDefaultConfigValue('shops');
+                const defaultType = DataStore.getDefaultConfigValue('types');
+                if (defaultAccount) accountSelect.value = defaultAccount;
+                if (defaultShop) shopSelect.value = defaultShop;
+                if (defaultType) typeSelect.value = defaultType;
+            },
+            renderPool() {
+                const poolNumbers = DataStore.getNumbers('pool');
+                const container = document.getElementById('poolList');
+                const emptyTip = document.getElementById('poolEmpty');
+                if (!container) {
+                    console.warn('poolList元素未找到');
+                    return;
+                }
+                if (poolNumbers.length === 0) {
+                    if (emptyTip) emptyTip.classList.remove('hidden');
+                    container.innerHTML = `
+                        <div class="text-center text-gray-400 py-8 text-sm" id="poolEmpty">
+                            暂无号池记录，点击添加
+                        </div>
+                    `;
+                    return;
+                }
+                if (emptyTip) emptyTip.classList.add('hidden');
+                container.innerHTML = '';
+                poolNumbers.forEach(item => {
+                    const div = this.createNumberItem(item, 'pool');
+                    container.appendChild(div);
+                });
+                this.initSwipeActions();
+            },
+            renderDealed() {
+                const dealedNumbers = DataStore.getNumbers('dealed');
+                const container = document.getElementById('dealedList');
+                const emptyTip = document.getElementById('dealedEmpty');
+                if (!container) {
+                    console.warn('dealedList元素未找到');
+                    return;
+                }
+                if (dealedNumbers.length === 0) {
+                    if (emptyTip) emptyTip.classList.remove('hidden');
+                    container.innerHTML = `
+                        <div class="text-center text-gray-400 py-8 text-sm" id="dealedEmpty">
+                            暂无成交记录
+                        </div>
+                    `;
+                    return;
+                }
+                if (emptyTip) emptyTip.classList.add('hidden');
+                container.innerHTML = '';
+                dealedNumbers.forEach(item => {
+                    const div = this.createNumberItem(item, 'dealed');
+                    container.appendChild(div);
+                });
+                this.initSwipeActions();
+            },
+            renderDeleted() {
+                const deletedNumbers = DataStore.getNumbers('deleted');
+                const container = document.getElementById('deletedList');
+                const emptyTip = document.getElementById('deletedEmpty');
+                if (!container) {
+                    console.warn('deletedList元素未找到');
+                    return;
+                }
+                if (deletedNumbers.length === 0) {
+                    if (emptyTip) emptyTip.classList.remove('hidden');
+                    container.innerHTML = `
+                        <div class="text-center text-gray-400 py-8 text-sm" id="deletedEmpty">
+                            暂无废号记录
+                        </div>
+                    `;
+                    return;
+                }
+                if (emptyTip) emptyTip.classList.add('hidden');
+                container.innerHTML = '';
+                deletedNumbers.forEach(item => {
+                    const div = this.createNumberItem(item, 'deleted');
+                    container.appendChild(div);
+                });
+                this.initSwipeActions();
+            },
+            // 核心优化：号池记录条应用账号对应的浅色背景
+            createNumberItem(item, status) {
+                const div = document.createElement('div');
+                div.className = 'swipe-item rounded shadow-sm overflow-hidden';
+                div.dataset.id = item.id;
+                div.dataset.status = status;
+                
+                // 左侧按钮：号池=成交，成交/废号=取消（统一绿色）
+                const leftBtnText = status === 'pool' ? '成交' : '取消';
+                const leftActions = document.createElement('div');
+                leftActions.className = 'swipe-actions-left';
+                leftActions.innerHTML = `<button class="swipe-btn bg-success swipe-left-btn" data-id="${item.id}">${leftBtnText}</button>`;
+                
+                // 右侧按钮：号池=废号，成交/废号=删除（统一红色）
+                const rightBtnText = status === 'pool' ? '废号' : '删除';
+                const rightActions = document.createElement('div');
+                rightActions.className = 'swipe-actions';
+                rightActions.innerHTML = `<button class="swipe-btn bg-danger swipe-right-btn" data-id="${item.id}">${rightBtnText}</button>`;
+                
+                // 卡片内容：号池记录应用账号对应的浅色背景
+                const content = document.createElement('div');
+                content.className = 'swipe-content flex flex-col p-2';
+                // 号池状态才应用背景色，其他状态保持白色
+                if (status === 'pool') {
+                    const accountColor = DataStore.getAccountColor(item.account);
+                    content.style.backgroundColor = accountColor;
+                } else {
+                    content.style.backgroundColor = '#FFFFFF';
+                }
+                
+                let contentHtml = `
+                    <div class="flex justify-between mb-0.5">
+                        <span class="text-primary font-medium text-sm">${item.shop || '-'}</span>
+                        <span class="text-gray-400 text-xs">${item.date || '-'}</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-0.5 mb-0.5">
+                        <div class="text-xs">账号: ${item.account || '-'}</div>
+                        <div class="text-xs">类型: ${item.type || '-'}</div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-0.5">
+                        <div class="text-xs font-medium">号码: ${item.number || '-'}</div>
+                        <div class="text-xs">成本: ¥${(item.cost || 0).toFixed(2)}</div>
+                    </div>
+                `;
+                if (status === 'dealed') {
+                    contentHtml += `
+                        <div class="grid grid-cols-2 gap-0.5 mt-0.5">
+                            <div class="text-xs">成交金额: ¥${(item.dealAmount || 0).toFixed(2)}</div>
+                            <div class="text-xs text-success">利润: ¥${((item.dealAmount || 0) - (item.cost || 0)).toFixed(2)}</div>
+                        </div>
+                    `;
+                }
+                content.innerHTML = contentHtml;
+                
+                // 组装卡片
+                div.appendChild(leftActions);
+                div.appendChild(content);
+                div.appendChild(rightActions);
+                
+                // 长按事件
+                let pressTimer = null;
+                let touchStartX = 0;
+                let touchStartY = 0;
+                let isSwipe = false;
+                
+                content.addEventListener('touchstart', (e) => {
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                    isSwipe = false;
+                    pressTimer = setTimeout(() => {
+                        if (!isSwipe) {
+                            this.handleItemLongPress(item.id);
+                        }
+                    }, 500);
+                }, { passive: true });
+                
+                content.addEventListener('touchmove', (e) => {
+                    const moveX = e.touches[0].clientX;
+                    const moveY = e.touches[0].clientY;
+                    const dx = Math.abs(moveX - touchStartX);
+                    const dy = Math.abs(moveY - touchStartY);
+                    if (dx > 10 || dy > 20) {
+                        isSwipe = true;
+                        clearTimeout(pressTimer);
+                    }
+                }, { passive: true });
+                
+                content.addEventListener('touchend', () => {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                }, { passive: true });
+                
+                content.addEventListener('mousedown', () => {
+                    pressTimer = setTimeout(() => {
+                        this.handleItemLongPress(item.id);
+                    }, 500);
+                });
+                
+                content.addEventListener('mouseup', () => {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                });
+                
+                return div;
+            },
+            initSwipeActions() {
+                const items = document.querySelectorAll('.swipe-item');
+                items.forEach(item => {
+                    let startX, startY;
+                    const content = item.querySelector('.swipe-content');
+                    const btnWidth = 70;
+                    const triggerThreshold = btnWidth * 0.6;
+                    const currentId = parseInt(item.dataset.id);
+                    const currentStatus = item.dataset.status;
+                    
+                    if (!content || !currentId || !currentStatus) return;
+                    
+                    const resetCard = () => {
+                        content.style.transform = 'translateX(0)';
+                    };
+                    
+                    item.addEventListener('touchstart', (e) => {
+                        startX = e.touches[0].clientX;
+                        startY = e.touches[0].clientY;
+                        resetCard();
+                    }, { passive: true });
+                    
+                    item.addEventListener('touchmove', (e) => {
+                        const moveX = e.touches[0].clientX;
+                        const moveY = e.touches[0].clientY;
+                        const dx = startX - moveX;
+                        const dy = Math.abs(startY - moveY);
+                        
+                        if (dy > 20) return;
+                        
+                        e.preventDefault();
+                        if (dx > 0) {
+                            const moveDistance = Math.min(dx, btnWidth);
+                            content.style.transform = `translateX(-${moveDistance}px)`;
+                        } else if (dx < 0) {
+                            const moveDistance = Math.min(Math.abs(dx), btnWidth);
+                            content.style.transform = `translateX(${moveDistance}px)`;
+                        }
+                    }, { passive: false });
+                    
+                    item.addEventListener('touchend', (e) => {
+                        const endX = e.changedTouches[0].clientX;
+                        const dx = startX - endX;
+                        
+                        if (dx > triggerThreshold) {
+                            content.style.transform = `translateX(-${btnWidth}px)`;
+                            if (currentStatus === 'pool') {
+                                this.confirmAction('标记废号', '确定要将这条记录标记为废号吗？记录将移至废号页面', () => {
+                                    DataStore.updateNumberStatus(currentId, 'deleted');
+                                    this.renderPool();
+                                    this.renderDeleted();
+                                    resetCard();
+                                    this.showTip('记录已标记为废号并移至废号页面', 'success');
+                                }, resetCard);
+                            } else {
+                                this.confirmAction('彻底删除', '确定要彻底删除这条记录吗？删除后不可恢复', () => {
+                                    DataStore.deleteNumber(currentId);
+                                    this.renderPool();
+                                    this.renderDealed();
+                                    this.renderDeleted();
+                                    resetCard();
+                                    this.showTip('记录已彻底删除', 'success');
+                                }, resetCard);
+                            }
+                        } else if (dx < -triggerThreshold) {
+                            content.style.transform = `translateX(${btnWidth}px)`;
+                            this.handleSwipeRight(currentId, currentStatus);
+                            resetCard();
+                        } else {
+                            resetCard();
+                        }
+                    }, { passive: true });
+                });
+                
+                document.querySelectorAll('.swipe-right-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const id = parseInt(btn.dataset.id);
+                        const status = btn.closest('.swipe-item').dataset.status;
+                        if (status === 'pool') {
+                            this.confirmAction('标记废号', '确定要将这条记录标记为废号吗？记录将移至废号页面', () => {
+                                DataStore.updateNumberStatus(id, 'deleted');
+                                this.renderPool();
+                                this.renderDeleted();
+                                this.showTip('记录已标记为废号并移至废号页面', 'success');
+                            });
+                        } else {
+                            this.confirmAction('彻底删除', '确定要彻底删除这条记录吗？删除后不可恢复', () => {
+                                DataStore.deleteNumber(id);
+                                this.renderPool();
+                                this.renderDealed();
+                                this.renderDeleted();
+                                this.showTip('记录已彻底删除', 'success');
+                            });
+                        }
+                    });
+                });
+                
+                document.querySelectorAll('.swipe-left-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const id = parseInt(btn.dataset.id);
+                        const status = btn.closest('.swipe-item').dataset.status;
+                        this.handleSwipeRight(id, status);
+                    });
+                });
+            },
+            handleSwipeRight(id, status) {
+                const number = DataStore.getAllNumbers().find(item => item.id === id);
+                if (!number) return;
+                
+                if (status === 'pool') {
+                    this.handleDealNumber(id);
+                } else if (status === 'dealed') {
+                    this.confirmAction('取消成交', '确定要取消成交吗？记录将恢复至号池', () => {
+                        DataStore.updateNumberStatus(id, 'pool');
+                        this.renderPool();
+                        this.renderDealed();
+                        this.showTip('已取消成交，记录恢复至号池', 'success');
+                    });
+                } else if (status === 'deleted') {
+                    this.confirmAction('恢复记录', '确定要恢复这条废号记录吗？记录将回到号池', () => {
+                        DataStore.updateNumberStatus(id, 'pool');
+                        this.renderPool();
+                        this.renderDeleted();
+                        this.showTip('已恢复废号记录至号池', 'success');
+                    });
+                }
+            },
+            handleDealNumber(id) {
+                const number = DataStore.getAllNumbers().find(item => item.id === id);
+                if (!number) return;
+                const dealAmountContainer = document.getElementById('dealAmountContainer');
+                const formTitle = document.getElementById('formTitle');
+                const formId = document.getElementById('formId');
+                const formAccount = document.getElementById('formAccount');
+                const formShop = document.getElementById('formShop');
+                const formNumber = document.getElementById('formNumber');
+                const formType = document.getElementById('formType');
+                const formDate = document.getElementById('formDate');
+                const formCost = document.getElementById('formCost');
+                const formDealAmount = document.getElementById('formDealAmount');
+                const numberFormModal = document.getElementById('numberFormModal');
+                if (!dealAmountContainer || !formTitle || !formId || !formAccount || !formShop || !formNumber || !formType || !formDate || !formCost || !formDealAmount || !numberFormModal) {
+                    console.warn('成交弹窗元素缺失');
+                    return;
+                }
+                dealAmountContainer.classList.remove('hidden');
+                formTitle.textContent = '确认成交';
+                formId.value = id;
+                formAccount.value = number.account || '';
+                formShop.value = number.shop || '';
+                formNumber.value = number.number || '';
+                formType.value = number.type || '';
+                formDate.value = number.date || '';
+                formCost.value = number.cost || 0;
+                formDealAmount.value = '';
+                const fields = ['formAccount', 'formShop', 'formNumber', 'formType', 'formDate', 'formCost'];
+                fields.forEach(field => {
+                    const el = document.getElementById(field);
+                    if (el) el.disabled = true;
+                });
+                numberFormModal.style.display = 'flex';
+            },
+            handleItemLongPress(id) {
+                this.confirmAction(
+                    '修改号码', 
+                    '确定要修改这条号码记录吗？',
+                    () => {
+                        this.editNumber(id);
+                    }
+                );
+            },
+            editNumber(id) {
+                const number = DataStore.getAllNumbers().find(item => item.id === id);
+                if (!number) return;
+                const dealAmountContainer = document.getElementById('dealAmountContainer');
+                const formTitle = document.getElementById('formTitle');
+                const formId = document.getElementById('formId');
+                const formAccount = document.getElementById('formAccount');
+                const formShop = document.getElementById('formShop');
+                const formNumber = document.getElementById('formNumber');
+                const formType = document.getElementById('formType');
+                const formDate = document.getElementById('formDate');
+                const formCost = document.getElementById('formCost');
+                const numberFormModal = document.getElementById('numberFormModal');
+                if (!dealAmountContainer || !formTitle || !formId || !formAccount || !formShop || !formNumber || !formType || !formDate || !formCost || !numberFormModal) {
+                    console.warn('编辑弹窗元素缺失');
+                    return;
+                }
+                dealAmountContainer.classList.add('hidden');
+                formTitle.textContent = '编辑号码';
+                formId.value = id;
+                formAccount.value = number.account || '';
+                formShop.value = number.shop || '';
+                formNumber.value = number.number || '';
+                formType.value = number.type || '';
+                formDate.value = number.date || '';
+                formCost.value = number.cost || 0;
+                const fields = ['formAccount', 'formShop', 'formNumber', 'formType', 'formDate', 'formCost'];
+                fields.forEach(field => {
+                    const el = document.getElementById(field);
+                    if (el) el.disabled = false;
+                });
+                numberFormModal.style.display = 'flex';
+            },
+            confirmAction(title, message, okCallback, cancelCallback) {
+                const confirmTitle = document.getElementById('confirmTitle');
+                const confirmMessage = document.getElementById('confirmMessage');
+                const confirmModal = document.getElementById('confirmModal');
+                const confirmOk = document.getElementById('confirmOk');
+                const confirmCancel = document.getElementById('confirmCancel');
+                if (!confirmTitle || !confirmMessage || !confirmModal || !confirmOk || !confirmCancel) {
+                    console.warn('确认弹窗元素缺失');
+                    return;
+                }
+                confirmTitle.textContent = title;
+                confirmMessage.textContent = message;
+                confirmModal.style.display = 'flex';
+                confirmOk.onclick = () => {
+                    confirmModal.style.display = 'none';
+                    okCallback && okCallback();
+                };
+                confirmCancel.onclick = () => {
+                    confirmModal.style.display = 'none';
+                    cancelCallback && cancelCallback();
+                };
+            },
+            // 显示配置弹窗：账号类型显示颜色选择
+            showConfigForm(type, id = null) {
+                const configFormType = document.getElementById('configFormType');
+                const configFormId = document.getElementById('configFormId');
+                const configFormName = document.getElementById('configFormName');
+                const configFormTitle = document.getElementById('configFormTitle');
+                const configFormModal = document.getElementById('configFormModal');
+                const colorSelector = document.getElementById('colorSelector');
+                const configFormColor = document.getElementById('configFormColor');
+                const colorPreview = document.getElementById('colorPreview');
+                
+                if (!configFormType || !configFormId || !configFormName || !configFormTitle || !configFormModal) {
+                    console.warn('配置弹窗元素缺失');
+                    return;
+                }
+                
+                // 只有账号配置显示颜色选择
+                if (type === 'accounts') {
+                    colorSelector.classList.remove('hidden');
+                    // 编辑时回显颜色
+                    if (id) {
+                        const configList = DataStore.getConfig(type);
+                        const item = configList.find(item => item.id === parseInt(id));
+                        if (item) {
+                            configFormColor.value = item.color || '#E8F3FF';
+                            colorPreview.style.backgroundColor = item.color || '#E8F3FF';
+                        }
+                    } else {
+                        // 新增默认选中第一个颜色
+                        configFormColor.value = '#E8F3FF';
+                        colorPreview.style.backgroundColor = '#E8F3FF';
+                    }
+                } else {
+                    colorSelector.classList.add('hidden');
+                }
+                
+                configFormType.value = type;
+                configFormId.value = id || '';
+                if (id) {
+                    const configList = DataStore.getConfig(type);
+                    const item = configList.find(item => item.id === parseInt(id));
+                    if (item) configFormName.value = item.name;
+                    configFormTitle.textContent = `编辑${this.getTypeName(type)}`;
+                } else {
+                    configFormName.value = '';
+                    configFormTitle.textContent = `添加${this.getTypeName(type)}`;
+                }
+                configFormModal.style.display = 'flex';
+            },
+            // 绑定颜色选择预览事件
+            bindColorPreview() {
+                const configFormColor = document.getElementById('configFormColor');
+                const colorPreview = document.getElementById('colorPreview');
+                if (configFormColor && colorPreview) {
+                    configFormColor.addEventListener('change', (e) => {
+                        colorPreview.style.backgroundColor = e.target.value;
+                    });
+                }
+            },
+            bindInputEvents() {
+                const requiredFields = ['formAccount','formShop','formNumber','formType','formDate'];
+                requiredFields.forEach(field => {
+                    const el = document.getElementById(field);
+                    if (el) {
+                        el.addEventListener('blur', () => {
+                            this.checkField(field);
+                        });
+                    }
+                });
+            },
+            checkField(field) {
+                const el = document.getElementById(field);
+                const tip = document.getElementById(`tip${field.replace('form','')}`);
+                if (!el) return false;
+                if (el.value.trim() === '') {
+                    el.classList.add('input-error');
+                    if (tip) tip.style.display = 'block';
+                    return false;
+                } else {
+                    el.classList.remove('input-error');
+                    if (tip) tip.style.display = 'none';
+                    return true;
+                }
+            },
+            validateForm() {
+                let isValid = true;
+                const requiredFields = ['formAccount','formShop','formNumber','formType','formDate'];
+                requiredFields.forEach(field => {
+                    if (!this.checkField(field)) isValid = false;
+                });
+                const dealAmountContainer = document.getElementById('dealAmountContainer');
+                if (dealAmountContainer && !dealAmountContainer.classList.contains('hidden')) {
+                    if (!this.checkField('formDealAmount')) isValid = false;
+                }
+                return isValid;
+            },
+            showTip(message, type = 'error') {
+                const tipModal = document.getElementById('tipModal');
+                const tipText = document.getElementById('tipText');
+                if (!tipModal || !tipText) {
+                    console.warn('提示弹窗元素缺失');
+                    alert(message);
+                    return;
+                }
+                tipText.textContent = message;
+                tipModal.style.display = 'block';
+                tipModal.className = type === 'success' 
+                    ? 'fixed top-10 left-1/2 -translate-x-1/2 bg-success text-white px-4 py-2 rounded shadow-lg z-50 block'
+                    : 'fixed top-10 left-1/2 -translate-x-1/2 bg-danger text-white px-4 py-2 rounded shadow-lg z-50 block';
+                setTimeout(() => {
+                    tipModal.style.display = 'none';
+                }, 2000);
+            },
+            bindExportEvent() {
+                const exportBtn = document.getElementById('exportAllBtn');
+                if (exportBtn) {
+                    exportBtn.addEventListener('click', () => {
+                        this.exportAllRecordsToExcel();
+                    });
+                }
+            },
+            exportAllRecordsToExcel() {
+                const allRecords = DataStore.getAllNumbers();
+                if (allRecords.length === 0) {
+                    this.showTip('暂无记录可导出', 'error');
+                    return;
+                }
+                const statusMap = {
+                    pool: '号池',
+                    dealed: '成交',
+                    deleted: '废号'
+                };
+                const exportData = allRecords.map(record => {
+                    const cost = parseFloat(record.cost || 0);
+                    const dealAmount = parseFloat(record.dealAmount || 0);
+                    const profit = (dealAmount - cost).toFixed(2);
+                    return {
+                        '记录ID': record.id || '',
+                        '账号': record.account || '-',
+                        '店名': record.shop || '-',
+                        '号码': record.number || '-',
+                        '类型': record.type || '-',
+                        '记录日期': record.date || '-',
+                        '成本(¥)': cost.toFixed(2),
+                        '成交金额(¥)': record.status === 'dealed' ? dealAmount.toFixed(2) : '-',
+                        '单条利润(¥)': record.status === 'dealed' ? profit : '-',
+                        '创建时间': new Date(record.createTime).toLocaleString() || '-',
+                        '成交时间': record.dealTime ? new Date(record.dealTime).toLocaleString() : '-',
+                        '记录状态': statusMap[record.status] || '未知'
+                    };
+                });
+                const wb = XLSX.utils.book_new();
+                const ws = XLSX.utils.json_to_sheet(exportData);
+                const wscols = [
+                    {wch: 12}, {wch: 10}, {wch: 10}, {wch: 15}, {wch: 10}, {wch: 12},
+                    {wch: 10}, {wch: 12}, {wch: 12}, {wch: 20}, {wch: 20}, {wch: 10}
+                ];
+                ws['!cols'] = wscols;
+                XLSX.utils.book_append_sheet(wb, ws, '号码管理全记录');
+                const timeStamp = new Date().toLocaleString().replace(/[\/: \,]/g, '-');
+                const fileName = `号码管理记录_${timeStamp}.xlsx`;
+                XLSX.writeFile(wb, fileName);
+                this.showTip('导出成功，文件已下载', 'success');
+            },
+            bindModalOutsideClose() {
+                const modals = [
+                    document.getElementById('confirmModal'),
+                    document.getElementById('numberFormModal'),
+                    document.getElementById('configFormModal')
+                ];
+                modals.forEach(modal => {
+                    if (modal) {
+                        modal.addEventListener('click', (e) => {
+                            if (!e.target.closest('.modal-content')) {
+                                modal.style.display = 'none';
+                            }
+                        });
+                    }
+                });
+            }
+        };
+        // 页面初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            DataStore.init();
+            Renderer.init();
+            const today = new Date().toISOString().split('T')[0];
+            const formDate = document.getElementById('formDate');
+            if (formDate) formDate.value = today;
+            // Tab切换：适配"设置"标签
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.tab-btn').forEach(b => {
+                        b.classList.remove('text-primary', 'border-primary');
+                        b.classList.add('text-gray-400');
+                    });
+                    btn.classList.add('text-primary', 'border-primary');
+                    btn.classList.remove('text-gray-400');
+                    document.querySelectorAll('.tab-content').forEach(content => {
+                        content.classList.add('hidden');
+                        content.classList.remove('block');
+                    });
+                    const tabId = btn.dataset.tab + 'Tab';
+                    const tabContent = document.getElementById(tabId);
+                    if (tabContent) {
+                        tabContent.classList.remove('hidden');
+                        tabContent.classList.add('block');
+                    }
+                });
+            });
+            // 添加号码按钮
+            const addNumberBtn = document.getElementById('addNumberBtn');
+            if (addNumberBtn) {
+                addNumberBtn.addEventListener('click', () => {
+                    const dealAmountContainer = document.getElementById('dealAmountContainer');
+                    const formTitle = document.getElementById('formTitle');
+                    const formId = document.getElementById('formId');
+                    const numberForm = document.getElementById('numberForm');
+                    const formDate = document.getElementById('formDate');
+                    const numberFormModal = document.getElementById('numberFormModal');
+                    if (!dealAmountContainer || !formTitle || !formId || !numberForm || !formDate || !numberFormModal) {
+                        console.warn('成交弹窗元素缺失');
+                        return;
+                    }
+                    dealAmountContainer.classList.add('hidden');
+                    formTitle.textContent = '添加号码';
+                    formId.value = '';
+                    numberForm.reset();
+                    formDate.value = today;
+                    Renderer.updateSelectOptions();
+                    const fields = ['formAccount', 'formShop', 'formNumber', 'formType', 'formDate', 'formCost'];
+                    fields.forEach(field => {
+                        const el = document.getElementById(field);
+                        const tip = document.getElementById(`tip${field.replace('form','')}`);
+                        if (el) {
+                            el.disabled = false;
+                            el.classList.remove('input-error');
+                        }
+                        if (tip) tip.style.display = 'none';
+                    });
+                    numberFormModal.style.display = 'flex';
+                });
+            }
+            // 清空号池按钮
+            const deleteAllBtn = document.getElementById('deleteAllBtn');
+            if (deleteAllBtn) {
+                deleteAllBtn.addEventListener('click', () => {
+                    Renderer.confirmAction(
+                        '清空号池', 
+                        '确定要清空号池吗？所有记录将标记为废号并移至废号页面',
+                        () => {
+                            DataStore.clearPool();
+                            Renderer.renderPool();
+                            Renderer.renderDeleted();
+                        }
+                    );
+                });
+            }
+            // 保存号码表单
+            const numberForm = document.getElementById('numberForm');
+            if (numberForm) {
+                numberForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    if (!Renderer.validateForm()) {
+                        Renderer.showTip('请填写所有必填项', 'error');
+                        return;
+                    }
+                    const formId = document.getElementById('formId');
+                    const dealAmountContainer = document.getElementById('dealAmountContainer');
+                    const formDealAmount = document.getElementById('formDealAmount');
+                    const formAccount = document.getElementById('formAccount');
+                    const formShop = document.getElementById('formShop');
+                    const formNumber = document.getElementById('formNumber');
+                    const formType = document.getElementById('formType');
+                    const formDate = document.getElementById('formDate');
+                    const formCost = document.getElementById('formCost');
+                    const numberFormModal = document.getElementById('numberFormModal');
+                    if (!formId || !dealAmountContainer || !formDealAmount || !formAccount || !formShop || !formNumber || !formType || !formDate || !formCost || !numberFormModal) {
+                        Renderer.showTip('表单元素缺失，保存失败', 'error');
+                        return;
+                    }
+                    const id = formId.value ? parseInt(formId.value) : null;
+                    const isDeal = !dealAmountContainer.classList.contains('hidden');
+                    const dealAmount = isDeal ? parseFloat(formDealAmount.value) : 0;
+                    const numberData = {
+                        account: formAccount.value,
+                        shop: formShop.value,
+                        number: formNumber.value,
+                        type: formType.value,
+                        date: formDate.value,
+                        cost: formCost.value
+                    };
+                    if (id) numberData.id = id;
+                    const isSaved = DataStore.saveNumber(numberData);
+                    if (isSaved) {
+                        Renderer.showTip('保存成功', 'success');
+                        if (isDeal && id) {
+                            DataStore.updateNumberStatus(id, 'dealed', dealAmount);
+                        }
+                        numberFormModal.style.display = 'none';
+                        Renderer.renderPool();
+                        Renderer.renderDealed();
+                        this.reset();
+                    } else {
+                        Renderer.showTip('保存失败，请重试', 'error');
+                    }
+                });
+            }
+            // 保存配置表单：账号配置保存颜色字段
+            const configForm = document.getElementById('configForm');
+            if (configForm) {
+                configForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const configFormType = document.getElementById('configFormType');
+                    const configFormId = document.getElementById('configFormId');
+                    const configFormName = document.getElementById('configFormName');
+                    const configFormColor = document.getElementById('configFormColor');
+                    
+                    if (!configFormType || !configFormId || !configFormName) {
+                        Renderer.showTip('配置表单元素缺失', 'error');
+                        return;
+                    }
+                    
+                    const type = configFormType.value;
+                    const id = configFormId.value ? parseInt(configFormId.value) : null;
+                    const name = configFormName.value.trim();
+                    if (!name) {
+                        Renderer.showTip(`请输入${Renderer.getTypeName(type)}名称`, 'error');
+                        return;
+                    }
+                    
+                    const configList = DataStore.getConfig(type);
+                    let newConfigItem = { name };
+                    
+                    // 账号配置额外保存颜色
+                    if (type === 'accounts') {
+                        newConfigItem.color = configFormColor.value || '#E8F3FF';
+                    }
+                    
+                    if (id) {
+                        const index = configList.findIndex(item => item.id === id);
+                        if (index > -1) {
+                            configList[index] = { ...configList[index], ...newConfigItem };
+                        }
+                    } else {
+                        const newId = configList.length > 0 ? Math.max(...configList.map(item => item.id)) + 1 : 1;
+                        configList.push({ id: newId, ...newConfigItem });
+                    }
+                    
+                    DataStore.saveConfig(type, configList);
+                    const configFormModal = document.getElementById('configFormModal');
+                    if (configFormModal) configFormModal.style.display = 'none';
+                    Renderer.renderConfig(type);
+                    // 账号颜色变更后重新渲染号池
+                    if (type === 'accounts') {
+                        Renderer.renderPool();
+                    }
+                    Renderer.showTip(`${Renderer.getTypeName(type)}保存成功`, 'success');
+                });
+            }
+            // 配置项按钮事件
+            document.addEventListener('click', (e) => {
+                if (e.target.classList.contains('add-config-btn')) {
+                    const type = e.target.dataset.type;
+                    Renderer.showConfigForm(type);
+                }
+                if (e.target.classList.contains('edit-config-btn')) {
+                    const type = e.target.dataset.type;
+                    const id = parseInt(e.target.dataset.id);
+                    Renderer.showConfigForm(type, id);
+                }
+                if (e.target.classList.contains('delete-config-btn')) {
+                    const type = e.target.dataset.type;
+                    const id = parseInt(e.target.dataset.id);
+                    Renderer.confirmAction(
+                        '确认删除',
+                        `确定要删除这个${Renderer.getTypeName(type)}吗？`,
+                        () => {
+                            let configList = DataStore.getConfig(type);
+                            const defaultId = DataStore.getDefaultConfigId(type);
+                            if (defaultId === id) {
+                                DataStore.clearDefaultConfig(type);
+                            }
+                            configList = configList.filter(item => item.id !== id);
+                            DataStore.saveConfig(type, configList);
+                            Renderer.renderConfig(type);
+                            // 删除账号后重新渲染号池
+                            if (type === 'accounts') {
+                                Renderer.renderPool();
+                            }
+                            Renderer.showTip(`${Renderer.getTypeName(type)}删除成功`, 'success');
+                        }
+                    );
+                }
+            });
+            // 关闭弹窗按钮
+            document.querySelectorAll('.close-modal').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const numberFormModal = document.getElementById('numberFormModal');
+                    const configFormModal = document.getElementById('configFormModal');
+                    const confirmModal = document.getElementById('confirmModal');
+                    if (numberFormModal) numberFormModal.style.display = 'none';
+                    if (configFormModal) configFormModal.style.display = 'none';
+                    if (confirmModal) confirmModal.style.display = 'none';
+                });
+            });
+        });
+    </script>
+</body>
+</html>
